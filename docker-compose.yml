@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mas_broker
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./lab/victim/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - mas_net
+
+  agent_sensor:
+    build: ./lab/victim/agents/sensor
+    container_name: mas_agent_sensor
+    depends_on:
+      - mosquitto
+    environment:
+      - BROKER=mosquitto
+      - AGENT_ID=sensor_001
+    networks:
+      - mas_net
+
+  agent_controller:
+    build: ./lab/victim/agents/controller
+    container_name: mas_agent_controller
+    depends_on:
+      - mosquitto
+    environment:
+      - BROKER=mosquitto
+      - AGENT_ID=controller_001
+    networks:
+      - mas_net
+
+  agent_logger:
+    build: ./lab/victim/agents/logger
+    container_name: mas_agent_logger
+    depends_on:
+      - mosquitto
+    environment:
+      - BROKER=mosquitto
+      - AGENT_ID=logger_001
+    networks:
+      - mas_net
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: mas_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - mas_net
+
+networks:
+  mas_net:
+    driver: bridge
