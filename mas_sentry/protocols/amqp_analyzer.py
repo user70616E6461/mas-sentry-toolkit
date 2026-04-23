@@ -113,3 +113,51 @@ class AMQPAnalyzer(BaseProtocolAnalyzer):
             )
         console.print(table)
         return self.queues
+
+
+    def enumerate_connections(self) -> List[Dict]:
+        data = self._api_get("connections")
+        if not data:
+            return []
+        self.connections = data
+
+        table = Table(title="[bold]Active AMQP Connections[/bold]")
+        table.add_column("Client", style="cyan")
+        table.add_column("Host", style="yellow")
+        table.add_column("User", style="red")
+        table.add_column("State", style="green")
+
+        for c in self.connections:
+            table.add_row(
+                c.get("client_properties", {}).get("connection_name", "unknown"),
+                c.get("peer_host", "?"),
+                c.get("user", "?"),
+                c.get("state", "?")
+            )
+        console.print(table)
+        return self.connections
+
+    def check_default_credentials(self) -> bool:
+        """Check if guest:guest works (RabbitMQ default)"""
+        original_user = self.username
+        original_pass = self.password
+        self.username = "guest"
+        self.password = "guest"
+        result = self._api_get("overview")
+        self.username = original_user
+        self.password = original_pass
+        if result:
+            console.print("[bold red][!] CRITICAL: RabbitMQ accessible with default guest:guest![/bold red]")
+            return True
+        console.print("[green][+] Default guest:guest credentials rejected[/green]")
+        return False
+
+    def full_audit(self):
+        """Run complete AMQP enumeration"""
+        console.print("[bold cyan][AMQP] Starting full audit...[/bold cyan]")
+        self.check_default_credentials()
+        self.enumerate_exchanges()
+        self.enumerate_queues()
+        self.enumerate_connections()
+        console.print(f"[bold green][AMQP] Audit complete: {len(self.exchanges)} exchanges, "
+                      f"{len(self.queues)} queues, {len(self.connections)} connections[/bold green]")
