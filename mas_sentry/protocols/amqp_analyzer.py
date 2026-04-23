@@ -67,3 +67,49 @@ class AMQPAnalyzer(BaseProtocolAnalyzer):
 
     def enumerate_topics(self) -> List[str]:
         return [q.get("name", "") for q in self.queues]
+
+
+    def enumerate_exchanges(self) -> List[Dict]:
+        data = self._api_get(f"exchanges/{self.vhost}")
+        if not data:
+            return []
+        self.exchanges = data
+
+        table = Table(title="[bold]AMQP Exchanges[/bold]")
+        table.add_column("Name", style="cyan")
+        table.add_column("Type", style="yellow")
+        table.add_column("Durable", style="green")
+        table.add_column("Auto-delete", style="red")
+
+        for ex in self.exchanges:
+            name = ex.get("name") or "[default]"
+            table.add_row(
+                name,
+                ex.get("type", "?"),
+                str(ex.get("durable", False)),
+                str(ex.get("auto_delete", False))
+            )
+        console.print(table)
+        return self.exchanges
+
+    def enumerate_queues(self) -> List[Dict]:
+        data = self._api_get(f"queues/{self.vhost}")
+        if not data:
+            return []
+        self.queues = data
+
+        table = Table(title="[bold]AMQP Queues[/bold]")
+        table.add_column("Name", style="cyan")
+        table.add_column("Messages", style="yellow", justify="right")
+        table.add_column("Consumers", style="green", justify="right")
+        table.add_column("Durable", style="blue")
+
+        for q in self.queues:
+            table.add_row(
+                q.get("name", "?"),
+                str(q.get("messages", 0)),
+                str(q.get("consumers", 0)),
+                str(q.get("durable", False))
+            )
+        console.print(table)
+        return self.queues
