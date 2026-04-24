@@ -150,3 +150,73 @@ class AgentFingerprint:
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
+
+
+@dataclass
+class BehavioralBaseline:
+    """
+    Saved behavioral baseline for a known-good agent.
+    Used in Phase 3 (active probing) to detect deviations.
+    Persisted to disk as JSON for cross-session comparison.
+    """
+    agent_id: str
+    created_at: str = field(
+        default_factory=lambda: datetime.utcnow().isoformat()
+    )
+    fingerprints: List[Dict] = field(default_factory=list)
+    known_topics: List[str] = field(default_factory=list)
+    expected_interval_ms: float = 0.0
+    expected_payload_size: float = 0.0
+    expected_entropy: float = 0.0
+
+    def save(self, path: str):
+        with open(path, "w") as f:
+            json.dump({
+                "agent_id": self.agent_id,
+                "created_at": self.created_at,
+                "known_topics": self.known_topics,
+                "expected_interval_ms": self.expected_interval_ms,
+                "expected_payload_size": self.expected_payload_size,
+                "expected_entropy": self.expected_entropy,
+            }, f, indent=2)
+
+    @classmethod
+    def load(cls, path: str) -> "BehavioralBaseline":
+        with open(path) as f:
+            data = json.load(f)
+        return cls(**data)
+
+    def deviation_score(self, fp: "AgentFingerprint") -> float:
+        """
+        Compute behavioral deviation score (0-100)
+        between this baseline and a new fingerprint.
+        Higher = more suspicious.
+        """
+        score = 0.0
+
+        # New topics not in baseline → suspicious
+        new_topics = set(fp.unique_topics) - set(self.known_topics)
+        score += len(new_topics) * 15.0
+
+        # Timing deviation
+        if self.expected_interval_ms > 0:
+            timing_dev = abs(
+                fp.timing.mean_interval_ms - self.expected_interval_ms
+            ) / self.expected_interval_ms
+            score += min(timing_dev * 30.0, 30.0)
+
+        # Payload size deviation
+        if self.expected_payload_size > 0:
+            payload_dev = abs(
+                fp.payload.mean_size_bytes - self.expected_payload_size
+            ) / self.expected_payload_size
+            score += min(payload_dev * 20.0, 20.0)
+
+        # Entropy deviation
+        if self.expected_entropy > 0:
+            entropy_dev = abs(
+                fp.payload.entropy_score - self.expected_entropy
+            ) / max(self.expected_entropy, 0.01)
+            score += min(entropy_dev * 10.0, 10.0)
+
+        return min(score, 100.0)
