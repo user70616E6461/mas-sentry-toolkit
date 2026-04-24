@@ -89,3 +89,64 @@ class PayloadMetrics:
             "entropy_score": round(self.entropy_score, 3),
             "encoding": self.encoding,
         }
+
+
+@dataclass
+class AgentFingerprint:
+    """
+    Complete behavioral fingerprint for a single inferred agent.
+    Built from passive observation of MQTT traffic.
+    This is the core ABFP output object.
+    """
+    agent_id: str
+    first_seen: float
+    last_seen: float
+
+    # Raw data
+    message_events: List[MessageEvent] = field(default_factory=list)
+    topic_profiles: Dict[str, TopicProfile] = field(default_factory=dict)
+
+    # Computed metrics (populated by ABFPFingerprinter)
+    timing: TimingMetrics = field(default_factory=TimingMetrics)
+    payload: PayloadMetrics = field(default_factory=PayloadMetrics)
+
+    # ABFP scoring
+    anomaly_score: float = 0.0        # 0.0 = normal, 100.0 = critical
+    threat_flags: List[str] = field(default_factory=list)
+    is_rogue: bool = False
+    confidence: float = 0.0           # confidence in fingerprint (0-1)
+
+    @property
+    def message_count(self) -> int:
+        return len(self.message_events)
+
+    @property
+    def unique_topics(self) -> List[str]:
+        return list(self.topic_profiles.keys())
+
+    @property
+    def active_duration_seconds(self) -> float:
+        return self.last_seen - self.first_seen
+
+    def add_threat_flag(self, flag: str):
+        if flag not in self.threat_flags:
+            self.threat_flags.append(flag)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "first_seen": datetime.fromtimestamp(self.first_seen).isoformat(),
+            "last_seen": datetime.fromtimestamp(self.last_seen).isoformat(),
+            "active_duration_seconds": round(self.active_duration_seconds, 1),
+            "message_count": self.message_count,
+            "unique_topics": self.unique_topics,
+            "timing": self.timing.to_dict(),
+            "payload": self.payload.to_dict(),
+            "anomaly_score": round(self.anomaly_score, 2),
+            "threat_flags": self.threat_flags,
+            "is_rogue": self.is_rogue,
+            "confidence": round(self.confidence, 2),
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
