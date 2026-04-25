@@ -122,3 +122,106 @@ class ABFPFingerprinter:
             f"{self._total_messages} messages[/bold green]"
         )
         return self.fingerprints
+
+
+    def build_fingerprints(self) -> Dict[str, AgentFingerprint]:
+        """Phase 2: Compute all metrics for each collected agent"""
+        console.print("[bold cyan][ABFP] Phase 2 — Building fingerprints...[/bold cyan]")
+
+        for agent_id, fp in self.fingerprints.items():
+            self._compute_timing(fp)
+            self._compute_payload(fp)
+            self._compute_confidence(fp)
+            console.print(
+                f"[green][ABFP] {agent_id}: "
+                f"{fp.message_count} msgs | "
+                f"interval={fp.timing.mean_interval_ms:.0f}ms | "
+                f"entropy={fp.payload.entropy_score:.2f} | "
+                f"confidence={fp.confidence:.2f}[/green]"
+            )
+        return self.fingerprints
+
+    def _compute_timing(self, fp: AgentFingerprint):
+        events = sorted(fp.message_events, key=lambda e: e.timestamp)
+        if len(events) < 2:
+            return
+        intervals = [
+            (events[i+1].timestamp - events[i].timestamp) * 1000
+            for i in range(len(events) - 1)
+        ]
+        n = len(intervals)
+        mean = sum(intervals) / n
+        variance = sum((x - mean) ** 2 for x in intervals) / n
+        std = math.sqrt(variance)
+
+        fp.timing = TimingMetrics(
+            mean_interval_ms=mean,
+            std_interval_ms=std,
+            min_interval_ms=min(intervals),
+            max_interval_ms=max(intervals),
+            burst_detected=min(intervals) < 50.0,
+            sample_count=n
+        )
+
+    def _compute_payload(self, fp: AgentFingerprint):
+        if not fp.message_events:
+            return
+        sizes = [e.payload_size for e in fp.message_events]
+        n = len(sizes)
+        mean = sum(sizes) / n
+        variance = sum((x - mean) ** 2 for x in sizes) / n
+        std = math.sqrt(variance)
+
+        # Entropy from last payload sample
+        last_events = fp.message_events[-min(10, n):]
+        all_bytes = b""
+        for ev in last_events:
+            # Reconstruct from preview only (real impl uses raw bytes)
+            all_bytes += ev.payload_preview.encode("utf-8", errors="replace")
+        entropy = shannon_entropy(all_bytes)
+
+        # Encoding from last event preview
+        encoding = detect_encoding(
+            fp.message_events[-1].payload_preview.encode("utf-8", errors="replace")
+        )
+
+        fp.payload = PayloadMetrics(
+            mean_size_bytes=mean,
+            std_size_bytes=std,
+            min_size_bytes=min(sizes),
+            max_size_bytes=max(sizes),
+            entropy_score=entropy,
+            encoding=encoding
+        )
+
+    def _compute_confidence(self, fp: AgentFingerprint):
+        count = fp.message_count
+        if count >= 50:
+            fp.confidence = 1.0
+        elif count >= self.MIN_MESSAGES_FOR_CONFIDENCE:
+            fp.confidence = count / 50.0
+        else:
+            fp.confidence = count / self.MIN_MESSAGES_FOR_CONFIDENCE * 0.5
+
+    def print_summary(self):
+        """Print rich fingerprint summary table"""
+        table = Table(title="[bold red]ABFP Fingerprint Summary[/bold red]")
+        table.add_column("Agent ID", style="cyan")
+        table.add_column("Messages", justify="right")
+        table.add_column("Topics", justify="right")
+        table.add_column("Interval ms", justify="right", style="yellow")
+        table.add_column("Entropy", justify="right", style="magenta")
+        table.add_column("Confidence", justify="right", style="green")
+        table.add_column("Flags", style="red")
+
+        for agent_id, fp in self.fingerprints.items():
+            table.add_row(
+                agent_id,
+                str(fp.message_count),
+                str(len(fp.unique_topics)),
+                f"{fp.timing.mean_interval_ms:.0f}",
+                f"{fp.payload.entropy_score:.2f}",
+                f"{fp.confidence:.2f}",
+                ", ".join(fp.threat_flags) or "—"
+            )
+        console.print(table)
