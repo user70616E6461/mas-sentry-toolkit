@@ -102,3 +102,114 @@ class AnomalyDetector:
             fp.is_rogue = fp.anomaly_score >= 70.0
 
         return fingerprints
+
+    def _check_timing(self, fp: AgentFingerprint) -> float:
+        """Z-score based timing deviation from baseline"""
+        score = 0.0
+        baseline = self.baselines.get(fp.agent_id)
+        if not baseline or baseline.expected_interval_ms <= 0:
+            return 0.0
+
+        expected = baseline.expected_interval_ms
+        actual   = fp.timing.mean_interval_ms
+        std      = fp.timing.std_interval_ms or 1.0
+
+        z_score = abs(actual - expected) / std
+        if z_score > self.TIMING_ZSCORE_THRESHOLD:
+            contrib = min(z_score * 5.0, 25.0)
+            score += contrib
+            fp.add_threat_flag("TIMING_DEVIATION")
+            self._add(
+                fp.agent_id, "TIMING_DEVIATION",
+                "HIGH" if z_score > 5 else "MEDIUM",
+                contrib,
+                f"Timing z-score={z_score:.1f} (expected={expected:.0f}ms, actual={actual:.0f}ms)",
+                {"z_score": round(z_score, 2), "expected_ms": expected, "actual_ms": actual}
+            )
+        return score
+
+    def _check_payload_spike(self, fp: AgentFingerprint) -> float:
+        """Detect abnormal payload size increase"""
+        score = 0.0
+        baseline = self.baselines.get(fp.agent_id)
+        if not baseline or baseline.expected_payload_size <= 0:
+            return 0.0
+
+        ratio = fp.payload.mean_size_bytes / baseline.expected_payload_size
+        if ratio > self.PAYLOAD_SPIKE_RATIO:
+            contrib = min((ratio - 1) * 8.0, 20.0)
+            score += contrib
+            fp.add_threat_flag("PAYLOAD_SPIKE")
+            self._add(
+                fp.agent_id, "PAYLOAD_SPIKE", "HIGH", contrib,
+                f"Payload {ratio:.1f}x larger than baseline "
+                f"({fp.payload.mean_size_bytes:.0f}B vs {baseline.expected_payload_size:.0f}B)",
+                {"ratio": round(ratio, 2)}
+            )
+        return score
+
+    def _check_entropy(self, fp: AgentFingerprint) -> float:
+        """Detect unusually high or low payload entropy"""
+        score = 0.0
+        entropy = fp.payload.entropy_score
+
+        if entropy >= self.ENTROPY_HIGH_THRESHOLD:
+            fp.add_threat_flag("HIGH_ENTROPY")
+            score += 15.0
+            self._add(
+                fp.agent_id, "HIGH_ENTROPY", "MEDIUM", 15.0,
+                f"Entropy={entropy:.2f} — payload may be encrypted or compressed",
+                {"entropy": entropy}
+            )
+        elif 0 < entropy <= self.ENTROPY_LOW_THRESHOLD:
+            fp.add_threat_flag("LOW_ENTROPY")
+            score += 10.0
+            self._add(
+                fp.agent_id, "LOW_ENTROPY", "LOW", 10.0,
+                f"Entropy={entropy:.2f} — suspiciously repetitive payload",
+                {"entropy": entropy}
+            )
+        return score
+
+    def _check_burst(self, fp: AgentFingerprint) -> float:
+        """Detect burst messaging (potential DoS or flood)"""
+        if fp.timing.burst_detected:
+            fp.add_threat_flag("BURST_DETECTED")
+            self._add(
+                fp.agent_id, "BURST_DETECTED", "HIGH", 20.0,
+                f"Burst pattern: min_interval={fp.timing.min_interval_ms:.1f}ms < {self.BURST_INTERVAL_MS}ms",
+                {"min_interval_ms": fp.timing.min_interval_ms}
+            )
+            return 20.0
+        return 0.0
+
+    def _check_new_topics(self, fp: AgentFingerprint) -> float:
+        """Detect new topics not in baseline (privilege escalation)"""
+        score = 0.0
+        baseline = self.baselines.get(fp.agent_id)
+        if not baseline:
+            return 0.0
+
+        new_topics = set(fp.unique_topics) - set(baseline.known_topics)
+        if new_topics:
+            contrib = min(len(new_topics) * 15.0, 45.0)
+            score += contrib
+            fp.add_threat_flag("TOPIC_ESCALATION")
+            self._add(
+                fp.agent_id, "TOPIC_ESCALATION", "CRITICAL", contrib,
+                f"Agent publishing to {len(new_topics)} new topic(s) outside baseline",
+                {"new_topics": list(new_topics)}
+            )
+        return score
+
+    def _check_rogue(self, fp: AgentFingerprint) -> float:
+        """Flag agents with no matching baseline as potential rogue"""
+        if fp.agent_id not in self.baselines and fp.confidence >= 0.5:
+            fp.add_threat_flag("NO_BASELINE")
+            self._add(
+                fp.agent_id, "NO_BASELINE", "MEDIUM", 10.0,
+                "Agent has no known-good behavioral baseline on record",
+                {"confidence": fp.confidence}
+            )
+            return 10.0
+        return 0.0
