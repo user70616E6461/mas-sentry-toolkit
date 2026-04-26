@@ -213,3 +213,65 @@ class AnomalyDetector:
             )
             return 10.0
         return 0.0
+
+    def print_report(self, fingerprints: Dict[str, AgentFingerprint]):
+        """Print full anomaly detection report"""
+        console.print()
+        console.print(Panel(
+            "[bold red]ABFP ANOMALY DETECTION REPORT[/bold red]",
+            style="red"
+        ))
+
+        # Summary table
+        table = Table(title="Agent Risk Summary")
+        table.add_column("Agent ID", style="cyan")
+        table.add_column("Messages", justify="right")
+        table.add_column("Anomaly Score", justify="right")
+        table.add_column("Risk Level", justify="center")
+        table.add_column("Flags", style="yellow")
+
+        for agent_id, fp in sorted(
+            fingerprints.items(),
+            key=lambda x: x[1].anomaly_score,
+            reverse=True
+        ):
+            score = fp.anomaly_score
+            if score >= 70:
+                risk = "[bold red]CRITICAL[/bold red]"
+            elif score >= 40:
+                risk = "[red]HIGH[/red]"
+            elif score >= 20:
+                risk = "[yellow]MEDIUM[/yellow]"
+            else:
+                risk = "[green]LOW[/green]"
+
+            table.add_row(
+                agent_id,
+                str(fp.message_count),
+                f"{score:.1f}/100",
+                risk,
+                ", ".join(fp.threat_flags) or "—"
+            )
+        console.print(table)
+
+        # Detailed findings
+        if self.findings:
+            console.print(f"\n[bold]Detailed Findings ({len(self.findings)} total):[/bold]")
+            for f in self.findings:
+                color = SEVERITY_COLORS.get(f.severity, "white")
+                console.print(
+                    f"  [{color}][{f.severity}][/{color}] "
+                    f"[cyan]{f.agent_id}[/cyan] — {f.description}"
+                )
+
+    def to_json(self) -> str:
+        import json
+        return json.dumps(
+            [f.to_dict() for f in self.findings],
+            indent=2
+        )
+
+    def save_report(self, path: str):
+        with open(path, "w") as f:
+            f.write(self.to_json())
+        console.print(f"[green][ABFP] Report saved to {path}[/green]")
